@@ -1,0 +1,186 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Table users
+model Users {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique @db.VarChar(50)
+  password  String   @map("password_hash") @db.VarChar(255)
+  role      String   @default("cashier") @db.VarChar(20)
+  create_at DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  orders Orders[]
+
+  @@map("users")
+}
+
+// table categories
+model Categories {
+  id   Int    @id @default(autoincrement())
+  name String @unique @db.VarChar(100) // @unique เพื่อบังคับไม่ให้ชื่อหมวดหมู่ซ้ำกัน
+
+  // Relationship back to Products
+  products Products[]
+
+  @@map("categories")
+}
+
+model Products {
+  id                Int      @id @default(autoincrement())
+  name              String   @unique @db.VarChar(255)
+  author            String?  @db.VarChar(255) // เป็น String? เนื่องจากไม่ได้ระบุว่า not null
+  detail            String?  @db.VarChar(255)
+  price             Decimal  @db.Decimal(10, 2)
+  barcode           String?  @db.VarChar(100) // @unique เพื่อบังคับไม่ให้ barcode ซ้ำกัน (หากมีค่า)
+  quantity          Int      @default(0)
+  lowStockThreshold Int      @default(10) @map("low_stock_threshold")
+  categoryId        Int      @map("category_id")
+  isDeleted         Boolean? @default(false)
+  lastUpdated       DateTime @default(now()) @map("last_updated") @db.Timestamp(6)
+
+  // Relationship to Categories
+  category Categories @relation(fields: [categoryId], references: [id])
+
+  // Relationships back to OrderItems
+  orderItems        OrderItems[]
+  productPromotions ProductPromotions[]
+  stockTransactions StockTransactions[]
+
+  @@unique([barcode, isDeleted])
+  @@map("products")
+}
+
+// --- Table: Orders ---
+model Orders {
+  id            Int       @id @default(autoincrement())
+  receiptId     String    @unique @db.VarChar(4)
+  userId        Int       @map("user_id") // Foreign key
+  status        String?   @default("pending") @db.VarChar(20)
+  totalAmount   Decimal   @default(0.00) @map("total_amount") @db.Decimal(10, 2)
+  paymentMethod String?   @map("payment_method") @db.VarChar(100) // เป็น String? ถ้าไม่ได้ระบุ not null
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  completedAt   DateTime? @map("completed_at") @db.Timestamp(6) // เป็น DateTime? เนื่องจากเป็น null ได้
+
+  // Relationship to Users
+  user Users @relation(fields: [userId], references: [id])
+
+  // Relationship back to OrderItems
+  orderItems OrderItems[]
+
+  @@map("orders")
+}
+
+// --- Table: OrderItems ---
+model OrderItems {
+  id        Int      @id @default(autoincrement())
+  orderId   Int      @map("order_id") // Foreign key
+  productId Int      @map("product_id") // Foreign key
+  quantity  Int? // เป็น Int? ถ้าไม่ได้ระบุ not null ใน DBML
+  price     Decimal? @db.Decimal(10, 2) // เป็น Decimal? ถ้าไม่ได้ระบุ not null ใน DBML
+
+  // Relationships to Orders and Products
+  order   Orders   @relation(fields: [orderId], references: [id])
+  product Products @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+model Promotions {
+  id            Int             @id @default(autoincrement())
+  name          String?         @db.VarChar(100)
+  startDate     DateTime        @map("start_date") @db.Timestamp(6)
+  endDate       DateTime        @map("end_date") @db.Timestamp(6)
+  status        PromotionStatus @default(UPCOMING) // e.g., "upcoming", "active", "expired"
+  discountType  DiscountType //perentage, fixed
+  discountValue Decimal         @db.Decimal(10, 2)
+
+  // เพิ่มฟิลด์นี้สำหรับ "จำนวนสินค้าที่ลด" หรือ "จำนวนครั้งที่โปรโมชั่นใช้ได้"
+  //'remaining_quota' และให้เป็น Int? เพื่อให้ null ได้ถ้าไม่มีโควต้าจำกัด
+  remainingQuota Int? @map("remaining_quota")
+
+  products ProductPromotions[]
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@map("promotions")
+}
+
+// ProductPromotions จะไม่จำเป็นต้องมี promotion_amount แล้ว
+model ProductPromotions {
+  productId   Int
+  promotionId Int
+
+  product   Products   @relation(fields: [productId], references: [id])
+  promotion Promotions @relation(fields: [promotionId], references: [id])
+
+  @@id([productId, promotionId])
+  @@map("product_promotions")
+}
+
+enum PromotionStatus {
+  UPCOMING
+  ACTIVE
+  EXPIRED
+}
+
+enum DiscountType {
+  PERCENT
+  FIXED
+}
+
+model StockTransactions {
+  id              Int      @id @default(autoincrement())
+  productId       Int
+  transactionType String // 'increase', 'decrease
+  quantity        Int // จำนวนที่เติม (เป็น +) หรือลด (เป็น -)
+  costPerUnit     Decimal? @db.Decimal(10, 2) // ราคาต้นทุนต่อหน่วยในครั้งนั้นๆ
+  transactionDate DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product Products @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+  @@map("stock_transactions")
+}
+
+//table lookup 
+model TotalLookup {
+  id       Int       @id @default(autoincrement())
+  type     TotalType
+  dateType DateType  @map("Date_Type")
+  value    Decimal   @db.Decimal(10, 2)
+  ref      Int? //ref on month or year
+
+  // income Income @relation(fields: [ref], references: [id])
+  parent   TotalLookup?  @relation("TotalHierarchy", fields: [ref], references: [id])
+  children TotalLookup[] @relation("TotalHierarchy")
+
+  @@map("total_lookup")
+}
+
+enum DateType {
+  Day
+  Month
+  Year
+}
+
+enum TotalType {
+  Income
+  Spend
+}
